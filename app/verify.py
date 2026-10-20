@@ -99,27 +99,32 @@ print("3) 未知判定：删除【鞠婧祎】后上传她的照片，应返回�
 print("=" * 70)
 persons = json.loads(get("/api/persons")[1].decode())["persons"]
 ju = [p for p in persons if p["name"] == "鞠婧祎"][0]
-print("  删除:", del_person(ju["id"]))
-fname2, data2 = gallery_image("鞠婧祎")
+# 删除人物会连底库目录一起清掉，先把图读进内存，后面还要用它重新注册
+d = os.path.join(GALLERY_DIR, "鞠婧祎")
+files = []
+for n in sorted(os.listdir(d)):
+    if n.lower().endswith((".jpg", ".jpeg", ".png")):
+        with open(os.path.join(d, n), "rb") as f:
+            files.append(("files", n, f.read()))
+print("  预先读入:", len(files), "张")
+r_del = del_person(ju["id"])
+print("  删除:", r_del)
+check("删除人物时底库目录一并清理", r_del.get("dir_removed") is True, r_del)
+check("底库目录已不存在", not os.path.isdir(d), d)
+fname2, data2 = files[0][1], files[0][2]
 st, r2 = post_multipart("/api/recognize", [("files", fname2, data2)], {"source": "verify"})
 res2 = r2["results"][0]
 print("  ", json.dumps(res2, ensure_ascii=False))
 f2 = res2["faces"]
 check("人名=未知", f2 and f2[0]["name"] == "未知", f2[0]["name"] if f2 else None)
 check("is_unknown=true", f2 and f2[0]["is_unknown"] is True, None)
-check("保留 candidate 供排查", f2 and f2[0]["candidate"] is not None, f2[0]["candidate"] if f2 else None)
+check("不再返回 candidate（页面不暴露「最接近」）",
+      f2 and "candidate" not in f2[0], sorted(f2[0].keys()) if f2 else None)
 
 print()
 print("=" * 70)
 print("4) 网页注册链路：重新注册【鞠婧祎】（模拟网页上传，全量恢复）")
 print("=" * 70)
-files = []
-d = os.path.join(GALLERY_DIR, "鞠婧祎")
-for n in sorted(os.listdir(d)):
-    if not n.lower().endswith((".jpg", ".jpeg", ".png")):
-        continue
-    with open(os.path.join(d, n), "rb") as f:
-        files.append(("files", n, f.read()))
 print("  待注册张数:", len(files))
 st, r3 = post_multipart("/api/persons", files, {"name": "鞠婧祎"})
 print("  ", json.dumps(r3, ensure_ascii=False)[:300])

@@ -40,7 +40,7 @@ docker compose up -d
 | 组件 | 说明 |
 |---|---|
 | app | Python 3.12 + FastAPI + OpenCV（YuNet 人脸检测 / SFace 识别 / YOLOv4-tiny 物品检测），监听 8000，**host 网络** |
-| nginx | 反向代理 `/api/` → app，静态直服 `/uploads/`、`/results/`、前端页面，监听 80 |
+| nginx | 反向代理 `/api/` → app，静态直服 `/uploads/`、`/results/`、`/gallery/`、前端页面，监听 80 |
 | MySQL | 复用宿主机 MySQL 8.4.11，库 `faces`，用户 `face`，utf8mb4 |
 
 底库：`face_samples.embedding` 存 128 维 float32（512 字节）；识别时按人求**类中心（centroid）**后做余弦比对。
@@ -73,8 +73,9 @@ face-app/
 │   ├── calibrate.py        # 留一法看分数分布、建议阈值
 │   ├── experiment.py       # 聚合方式 × TTA 对比实验
 │   ├── experiment2.py      # 阈值 + margin 决策规则搜索
-│   ├── verify.py           # 端到端自检（21 项断言）
+│   ├── verify.py           # 端到端自检（24 项断言）
 │   ├── verify_objects.py   # 物品检测自检（12 项断言）
+│   ├── verify_photos.py    # 人脸库照片管理自检（32 项断言）
 │   └── fonts/simhei.ttf
 ├── web/index.html          # 单页前端（4 个 tab）
 ├── nginx/default.conf
@@ -100,6 +101,7 @@ sudo docker compose exec -T app python seed_gallery.py        # 重建底库
 sudo docker compose exec -T app python calibrate.py           # 看分数分布
 sudo docker compose exec -T app python verify.py              # 人脸端到端自检
 sudo docker compose exec -T app python verify_objects.py      # 物品检测自检
+sudo docker compose exec -T app python verify_photos.py       # 人脸库照片管理自检
 sudo docker stats --no-stream                                 # 资源占用
 ```
 
@@ -220,7 +222,31 @@ Navicat：`ssh -L 3307:127.0.0.1:3306 chen@127.0.0.1 -p 2222`，再连 `127.0.0.
 - `http://<IP>` → 浏览器禁用，页面给出明确提示
 - 设备无摄像头 → 提示「未检测到摄像头设备」，改用「上传图片识别」
 
-## 十、排障
+## 十、人脸库照片管理
+
+网页「人脸库管理」里每行有一个「照片」按钮，点开能看到这个人底库里的每一张图，可以**逐张替换或删除**，也能继续追加。特征跟着一起重算，不用重建镜像、不用重启。
+
+### 接口
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| GET | `/api/persons/{pid}/photos` | 列出某人的照片：`sid`、`file`、`url`、`exists`、`det_score` |
+| POST | `/api/persons/{pid}/photos` | 追加照片（`files`）；带 `replace_id` 时替换那一张（只能 1 张） |
+| DELETE | `/api/persons/{pid}/photos/{sid}` | 删除单张，库里特征与磁盘文件一起清 |
+
+照片通过 nginx 的 `/gallery/` 直接读静态文件（`data/gallery` 只读挂载进 nginx 容器）。
+
+### 几条行为约定
+
+- **注册图现在会真正落盘**：`/api/persons` 把图写到 `data/gallery/<人名>/<uuid>.jpg`，`image_path` 存绝对路径。早期版本只记了 `web-upload:文件名` 而没存文件，启动时会按文件名去 `gallery/<人名>/` 找回并改写路径（幂等，日志里有「已修复 N 条历史样本的图片路径」）。
+- **替换 = 先加新的、再删旧的**：新图入库成功后才删旧记录，替换失败不会把已有照片弄丢；旧文件在无其它样本引用时一并清理。
+- **删单张**：允许删到 0 张，此时人物仍在库里但匹配不到，前端会提示。
+- **删整人**：连同 `gallery/<人名>/` 目录一起删，否则 `/api/gallery/rebuild` 会把人扫回来。原始训练图请另存（本地 `桌面\训练照片` 有备份）。
+- 每次增删改后 `Gallery.load()` 重算类中心，识别立刻按新底库走。
+
+自检：`verify_photos.py` 覆盖清单 / 追加 / 替换 / 删除 / 注册落盘 / 缓存同步，共 32 项。
+
+## 十一、排障
 
 | 现象 | 处理 |
 |---|---|

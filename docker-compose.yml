@@ -52,3 +52,4 @@ services:
       - ./web:/usr/share/nginx/html:ro
       - ./data/uploads:/srv/face-data/uploads:ro
       - ./data/results:/srv/face-data/results:ro
+      - ./data/gallery:/srv/face-data/gallery:ro

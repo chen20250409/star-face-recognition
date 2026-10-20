@@ -68,6 +68,21 @@
         border-radius:99px;font-size:12px;padding:2px 10px;margin:0 6px 6px 0;white-space:nowrap}
   .chip i{font-style:normal;color:#5b8def;font-size:11px;margin-left:5px}
   .chip.sm{font-size:11.5px;padding:1px 8px;margin:0 4px 2px 0}
+  .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+  .pitem{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
+  .pitem .pimg{background:#111;height:108px;display:flex;align-items:center;justify-content:center}
+  .pitem .pimg img{width:100%;height:108px;object-fit:cover;display:block}
+  .pitem .noimg{color:#9aa3af;font-size:11.5px;text-align:center;line-height:1.6}
+  .pitem .noimg span{font-size:10.5px;color:#6b7280}
+  .pinfo{font-size:11px;color:var(--muted);padding:4px 7px;white-space:nowrap;
+         overflow:hidden;text-overflow:ellipsis;border-bottom:1px solid #f0f2f5}
+  .pbtns{display:flex}
+  .pbtns button{flex:1;border-radius:0;border:0;border-top:1px solid var(--line);
+                padding:6px 0;font-size:12px;cursor:pointer;background:#fff}
+  .pbtns button:first-child{border-right:1px solid var(--line);color:var(--text)}
+  .pbtns button:last-child{color:var(--warn)}
+  .pbtns button:hover{background:#f7f8fa}
+  button.sm{padding:4px 10px;font-size:12.5px}
   .spinner{display:inline-block;width:13px;height:13px;border:2px solid #cbd5e1;border-top-color:var(--brand);
            border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:6px}
   @keyframes sp{to{transform:rotate(360deg)}}
@@ -155,6 +170,8 @@
     <div class="panel">
       <h2>当前人脸库 <button class="btn ghost" style="float:right;padding:5px 12px;font-size:13px" id="btnReloadPersons">刷新</button></h2>
       <div id="personsBox"><div class="empty">加载中…</div></div>
+      <div class="hint">点「照片」可以查看该人的每一张底库图，逐张替换或删除；替换后特征立即重算，不用重建镜像。</div>
+      <input type="file" id="photoInput" accept="image/*" hidden>
     </div>
   </section>
 </main>
@@ -191,13 +208,11 @@ function faceRows(faces) {
   if (!faces || !faces.length) return '<div class="row"><span class="meta">未检测到人脸</span></div>';
   return faces.map(f => {
     const known = !f.is_unknown;
-    const cand = (!known && f.candidate) ? `<span class="meta">（最接近：${f.candidate}）</span>` : '';
     return `<div class="row">
       <span class="name ${known?'':'unknown'}">${f.name}
         <span class="badge ${known?'k':'u'}">${known?'已识别':'未知'}</span></span>
       <span class="meta">相似度 ${Number(f.score).toFixed(3)}</span></div>
-      <div class="row"><span class="meta">检测置信度 ${Number(f.det_score).toFixed(3)}</span>${cand ? '<span></span>' : ''}</div>
-      ${cand ? `<div class="row"><span class="meta"></span>${cand}</div>` : ''}`;
+      <div class="row"><span class="meta">检测置信度 ${Number(f.det_score).toFixed(3)}</span></div>`;
   }).join('<hr style="border:0;border-top:1px solid #f0f2f5;margin:6px 0">');
 }
 
@@ -384,25 +399,123 @@ async function loadRecords() {
 $('#btnReloadRecords').onclick = loadRecords;
 
 /* ---------------- 人脸库 ---------------- */
+const esc = s => String(s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let openPid = 0, photoCtx = null;
+
 async function loadPersons() {
   $('#personsBox').innerHTML = '<div class="empty">加载中…</div>';
   try {
     const j = await (await fetch('/api/persons', {cache:'no-store'})).json();
     if (!j.persons.length) { $('#personsBox').innerHTML = '<div class="empty">人脸库为空</div>'; return; }
     $('#personsBox').innerHTML = `<table>
-      <tr><th style="width:70px">ID</th><th>姓名</th><th style="width:110px">特征数</th><th style="width:110px">操作</th></tr>
-      ${j.persons.map(p => `<tr><td class="meta">${p.id}</td><td class="name">${p.name}</td>
+      <tr><th style="width:60px">ID</th><th>姓名</th><th style="width:90px">特征数</th><th style="width:150px">操作</th></tr>
+      ${j.persons.map(p => `<tr>
+        <td class="meta">${p.id}</td><td class="name">${esc(p.name)}</td>
         <td class="meta">${p.samples} 张</td>
-        <td><button class="btn danger" style="padding:4px 10px;font-size:12.5px" onclick="delPerson(${p.id},'${p.name}')">删除</button></td>
-        </tr>`).join('')}</table>`;
+        <td>
+          <button class="btn ghost sm" style="margin-right:6px" data-act="photos" data-pid="${p.id}">照片</button>
+          <button class="btn danger sm" data-act="del" data-pid="${p.id}" data-name="${esc(p.name)}">删除</button>
+        </td></tr>
+      <tr id="pr-${p.id}" hidden><td colspan="4" style="background:#fafbfd;padding:14px">
+        <div id="pb-${p.id}"></div></td></tr>`).join('')}</table>`;
+    if (openPid && document.getElementById('pr-' + openPid)) {
+      document.getElementById('pr-' + openPid).hidden = false;
+      loadPhotos(openPid);
+    }
   } catch (e) { $('#personsBox').innerHTML = '<div class="empty">加载失败：' + e.message + '</div>'; }
 }
-window.delPerson = async (id, name) => {
-  if (!confirm(`确定从人脸库删除「${name}」？该人的全部特征都会被移除。`)) return;
+
+async function togglePhotos(pid) {
+  const row = document.getElementById('pr-' + pid);
+  if (!row) return;
+  if (!row.hidden) { row.hidden = true; openPid = 0; return; }
+  document.querySelectorAll('tr[id^="pr-"]').forEach(r => r.hidden = true);
+  row.hidden = false; openPid = pid;
+  await loadPhotos(pid);
+}
+
+async function loadPhotos(pid) {
+  const box = document.getElementById('pb-' + pid);
+  if (!box) return;
+  box.innerHTML = '<span class="meta"><span class="spinner"></span>加载中…</span>';
+  try {
+    const j = await (await fetch(`/api/persons/${pid}/photos`, {cache:'no-store'})).json();
+    if (!j.ok) throw new Error(j.detail || '加载失败');
+    const addBtn = `<div style="margin-top:10px">
+      <button class="btn ghost sm" data-act="padd" data-pid="${pid}">＋ 添加照片</button>
+      ${j.missing ? `<span class="meta" style="margin-left:10px">其中 ${j.missing} 张没有原图（早期注册未落盘），只能删除</span>` : ''}
+    </div>`;
+    if (!j.photos.length) { box.innerHTML = '<div class="empty">该人还没有底库照片</div>' + addBtn; return; }
+    box.innerHTML = `<div class="pgrid">` + j.photos.map(ph => `
+      <div class="pitem">
+        <div class="pimg">${ph.url
+          ? `<img src="${ph.url}" loading="lazy" alt="底库照片">`
+          : `<div class="noimg">无原图<br><span>早期注册未落盘</span></div>`}</div>
+        <div class="pinfo">#${ph.sid} · 检测置信度 ${ph.det_score != null ? Number(ph.det_score).toFixed(2) : '-'}</div>
+        <div class="pbtns">
+          <button data-act="prep" data-pid="${pid}" data-sid="${ph.sid}">替换</button>
+          <button data-act="pdel" data-pid="${pid}" data-sid="${ph.sid}">删除</button>
+        </div>
+      </div>`).join('') + `</div>` + addBtn;
+  } catch (e) { box.innerHTML = '<div class="empty">加载失败：' + e.message + '</div>'; }
+}
+
+async function delPerson(id, name) {
+  if (!confirm(`确定从人脸库删除「${name}」？该人的全部照片和特征都会被移除。`)) return;
   const r = await fetch('/api/persons/' + id, {method:'DELETE'});
   const j = await r.json();
-  alert(r.ok ? `已删除：${j.deleted}` : ('删除失败：' + (j.detail || r.status)));
+  if (!r.ok) { alert('删除失败：' + (j.detail || r.status)); return; }
+  if (openPid === id) openPid = 0;
+  alert(`已删除：${j.deleted}`);
   loadPersons(); refreshHealth();
+}
+
+async function delPhoto(pid, sid) {
+  if (!confirm('删除这张底库照片？它对应的特征也会一起移除。')) return;
+  const r = await fetch(`/api/persons/${pid}/photos/${sid}`, {method:'DELETE'});
+  const j = await r.json();
+  if (!r.ok) { alert('删除失败：' + (j.detail || r.status)); return; }
+  await loadPhotos(pid); loadPersons(); refreshHealth();
+}
+
+$('#personsBox').addEventListener('click', e => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  const pid = Number(b.dataset.pid), act = b.dataset.act;
+  if (act === 'photos') togglePhotos(pid);
+  else if (act === 'del') delPerson(pid, b.dataset.name || '');
+  else if (act === 'pdel') delPhoto(pid, Number(b.dataset.sid));
+  else if (act === 'prep') pickPhoto(pid, Number(b.dataset.sid));
+  else if (act === 'padd') pickPhoto(pid, 0);
+});
+
+function pickPhoto(pid, sid) {
+  photoCtx = {pid, sid};
+  const el = $('#photoInput');
+  el.multiple = !sid;
+  el.value = '';
+  el.click();
+}
+
+$('#photoInput').onchange = async () => {
+  const fs = $('#photoInput').files;
+  if (!fs.length || !photoCtx) return;
+  const {pid, sid} = photoCtx;
+  const fd = new FormData();
+  for (const f of fs) fd.append('files', f, f.name);
+  if (sid) fd.append('replace_id', sid);
+  const box = document.getElementById('pb-' + pid);
+  if (box) box.insertAdjacentHTML('afterbegin',
+    '<div class="meta" id="pbmsg"><span class="spinner"></span>上传并提取特征…</div>');
+  try {
+    const r = await fetch(`/api/persons/${pid}/photos`, {method:'POST', body:fd});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+  } catch (err) {
+    alert((sid ? '替换' : '添加') + '失败：' + err.message);
+  }
+  await loadPhotos(pid); loadPersons(); refreshHealth();
 };
 $('#btnAddPerson').onclick = async () => {
   const name = $('#newName').value.trim();

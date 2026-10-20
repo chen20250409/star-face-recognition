@@ -2,8 +2,10 @@
 """人脸识别服务：FastAPI + YuNet/SFace + MySQL"""
 import logging
 import os
+import shutil
 import threading
 import time
+import urllib.parse
 import uuid
 from datetime import datetime
 from typing import List
@@ -116,6 +118,77 @@ def save_file(data: bytes, subdir: str, suffix: str) -> tuple:
     return path, url
 
 
+# ---------------------------------------------------------------- 底库图片
+def gallery_rel(image_path: str):
+    """底库内的文件返回相对 GALLERY_DIR 的路径，否则 None"""
+    if not image_path or image_path.startswith("web-upload:"):
+        return None
+    try:
+        base = os.path.realpath(GALLERY_DIR)
+        p = os.path.realpath(image_path)
+        if not p.startswith(base + os.sep):
+            return None
+        return os.path.relpath(p, base).replace(os.sep, "/")
+    except Exception:
+        return None
+
+
+def gallery_url(image_path: str):
+    rel = gallery_rel(image_path)
+    return "/gallery/" + urllib.parse.quote(rel) if rel else None
+
+
+def save_gallery_image(name: str, data: bytes, suffix: str) -> str:
+    """注册图落盘到底库目录 gallery/<人名>/，返回绝对路径"""
+    d = os.path.join(GALLERY_DIR, name)
+    os.makedirs(d, exist_ok=True)
+    os.chmod(d, 0o755)
+    suffix = suffix.lower() if suffix and suffix.lower() in IMG_EXT else ".jpg"
+    path = os.path.join(d, uuid.uuid4().hex[:12] + suffix)
+    with open(path, "wb") as f:
+        f.write(data)
+    os.chmod(path, 0o644)
+    return path
+
+
+def drop_sample_file(image_path: str) -> bool:
+    """样本删掉后清理文件：只删底库内、且已无其它样本引用的文件"""
+    if not gallery_rel(image_path):
+        return False
+    p = os.path.realpath(image_path)
+    if not os.path.isfile(p):
+        return False
+    with SessionLocal() as s:
+        left = s.query(FaceSample).filter(FaceSample.image_path == image_path).count()
+    if left > 0:
+        return False
+    try:
+        os.remove(p)
+        return True
+    except OSError:
+        return False
+
+
+def fix_legacy_paths() -> int:
+    """早期网页注册只记了 web-upload:文件名、没落盘。
+    启动时按文件名去 gallery/<人名>/ 找真实文件并改写路径，幂等。"""
+    fixed = 0
+    with SessionLocal() as s:
+        rows = (s.query(FaceSample, Person).join(Person, Person.id == FaceSample.person_id)
+                .filter(FaceSample.image_path.like("web-upload:%")).all())
+        for fs, p in rows:
+            fn = os.path.basename(fs.image_path.split(":", 1)[1])
+            cand = os.path.join(GALLERY_DIR, p.name, fn)
+            if os.path.isfile(cand):
+                fs.image_path = cand
+                fixed += 1
+        if fixed:
+            s.commit()
+    if fixed:
+        log.info("已修复 %d 条历史样本的图片路径（web-upload → 底库实际文件）", fixed)
+    return fixed
+
+
 def seed_gallery(eng: FaceEngine, clear: bool = False) -> dict:
     """扫描 /data/gallery/<人名>/ 建底库"""
     if clear:
@@ -159,6 +232,7 @@ def recognize_one(data: bytes, source: str, detect_objects: bool = True) -> dict
     bgr, rgb, faces = ENGINE.detect_all(data)
     results = []
     face_boxes = []
+    cands = []
     for i in range(len(faces)):
         row = faces[i]
         vec = ENGINE.embed(bgr, row)
@@ -172,13 +246,13 @@ def recognize_one(data: bytes, source: str, detect_objects: bool = True) -> dict
             name, unknown = UNKNOWN, True
         bbox = [float(row[0]), float(row[1]), float(row[2]), float(row[3])]
         face_boxes.append(bbox)
+        cands.append(candidate)      # 只落库供排查，不返回给前端
         results.append({
             "bbox": bbox,
             "name": name,
             "score": round(float(score), 4),
             "margin": round(float(margin), 4),
             "is_unknown": unknown,
-            "candidate": candidate,
             "det_score": round(float(row[14]), 4),
         })
 
@@ -197,12 +271,12 @@ def recognize_one(data: bytes, source: str, detect_objects: bool = True) -> dict
         s.add(row)
         s.flush()
         log_id = row.id
-        for r in results:
+        for i, r in enumerate(results):
             s.add(RecogFace(log_id=log_id,
                             person_name=None if r["is_unknown"] else r["name"],
                             score=r["score"],
                             is_unknown=1 if r["is_unknown"] else 0,
-                            candidate_name=r["candidate"],
+                            candidate_name=cands[i],
                             bbox="%d,%d,%d,%d" % tuple(int(round(x)) for x in r["bbox"]),
                             det_score=r["det_score"]))
         for o in objects:
@@ -236,6 +310,7 @@ def on_startup():
         r = seed_gallery(ENGINE)
         GALLERY.load()
         log.info("自动建库完成：成功 %d 张，失败 %d 张 %s", r["added"], len(r["failed"]), r["failed"][:3])
+    fix_legacy_paths()
     log.info("服务就绪，阈值 THRESHOLD=%.3f", THRESHOLD)
 
 
@@ -275,6 +350,22 @@ async def recognize(files: List[UploadFile] = File(...), source: str = Form("upl
     return {"ok": True, "results": out, "errors": errors}
 
 
+def ingest_sample(pid: int, name: str, data: bytes, filename: str):
+    """解码 → 检测 → 取最大脸 → 提特征 → 落盘 → 入库。返回 (ok, 说明)"""
+    ENGINE.decode(data)
+    bgr, _rgb, faces = ENGINE.detect_all(data)
+    if len(faces) == 0:
+        return False, "未检测到人脸"
+    row = ENGINE.largest_face(faces)
+    vec = ENGINE.embed(bgr, row)
+    path = save_gallery_image(name, data, os.path.splitext(filename or "")[1])
+    with SessionLocal() as s:
+        s.add(FaceSample(person_id=pid, image_path=path,
+                         embedding=vec.tobytes(), det_score=float(row[14])))
+        s.commit()
+    return True, path
+
+
 @app.get("/api/persons")
 def list_persons():
     with SessionLocal() as s:
@@ -295,19 +386,11 @@ async def add_person(name: str = Form(...), files: List[UploadFile] = File(...))
     added, failed = 0, []
     for f in files:
         try:
-            data = await f.read()
-            ENGINE.decode(data)
-            bgr, _rgb, faces = ENGINE.detect_all(data)
-            if len(faces) == 0:
-                failed.append({"file": f.filename, "reason": "未检测到人脸"})
-                continue
-            row = ENGINE.largest_face(faces)
-            vec = ENGINE.embed(bgr, row)
-            with SessionLocal() as s:
-                s.add(FaceSample(person_id=pid, image_path="web-upload:%s" % f.filename,
-                                 embedding=vec.tobytes(), det_score=float(row[14])))
-                s.commit()
-            added += 1
+            ok, info = ingest_sample(pid, name, await f.read(), f.filename)
+            if ok:
+                added += 1
+            else:
+                failed.append({"file": f.filename, "reason": info})
         except Exception as e:
             failed.append({"file": f.filename, "reason": str(e)[:160]})
     GALLERY.load()
@@ -324,8 +407,106 @@ def delete_person(pid: int):
         s.query(FaceSample).filter(FaceSample.person_id == pid).delete()
         s.delete(p)
         s.commit()
+    # 同时删掉底库目录，否则 /api/gallery/rebuild 会把人扫回来
+    d = os.path.realpath(os.path.join(GALLERY_DIR, name))
+    dir_removed = False
+    if d.startswith(os.path.realpath(GALLERY_DIR) + os.sep) and os.path.isdir(d):
+        try:
+            shutil.rmtree(d)
+            dir_removed = True
+        except OSError as e:
+            log.warning("删除底库目录失败 %s: %s", d, e)
     GALLERY.load()
-    return {"ok": True, "deleted": name}
+    return {"ok": True, "deleted": name, "dir_removed": dir_removed}
+
+
+@app.get("/api/persons/{pid}/photos")
+def list_photos(pid: int):
+    """某人底库里的照片清单：可看图、可逐张替换/删除"""
+    with SessionLocal() as s:
+        p = s.query(Person).filter(Person.id == pid).first()
+        if p is None:
+            raise HTTPException(404, "人物不存在")
+        rows = (s.query(FaceSample).filter(FaceSample.person_id == pid)
+                .order_by(FaceSample.id).all())
+        photos = []
+        for r in rows:
+            rel = gallery_rel(r.image_path)
+            photos.append({
+                "sid": r.id,
+                "file": rel or r.image_path,
+                "url": gallery_url(r.image_path),
+                "exists": bool(rel and os.path.isfile(r.image_path)),
+                "det_score": round(float(r.det_score), 4) if r.det_score is not None else None,
+                "created_at": r.created_at.strftime("%Y-%m-%d %H:%M:%S") if r.created_at else "",
+            })
+        info = {"id": p.id, "name": p.name}
+    return {"ok": True, "person": info, "photos": photos,
+            "missing": sum(1 for x in photos if not x["exists"])}
+
+
+@app.post("/api/persons/{pid}/photos")
+async def add_or_replace_photos(pid: int, files: List[UploadFile] = File(...),
+                                replace_id: int = Form(0)):
+    """append（不给 replace_id）或替换某一张（给 replace_id，只能 1 张）"""
+    with SessionLocal() as s:
+        p = s.query(Person).filter(Person.id == pid).first()
+        if p is None:
+            raise HTTPException(404, "人物不存在")
+        name = p.name
+    old_sid, old_path = 0, None
+    if replace_id:
+        if len(files) != 1:
+            raise HTTPException(400, "替换一次只能选 1 张照片")
+        with SessionLocal() as s:
+            old = s.query(FaceSample).filter(FaceSample.id == replace_id,
+                                             FaceSample.person_id == pid).first()
+            if old is None:
+                raise HTTPException(404, "要替换的照片不存在")
+            old_sid, old_path = old.id, old.image_path
+
+    added, failed = 0, []
+    for f in files:
+        try:
+            ok, info = ingest_sample(pid, name, await f.read(), f.filename)
+            if ok:
+                added += 1
+            else:
+                failed.append({"file": f.filename, "reason": info})
+        except Exception as e:
+            failed.append({"file": f.filename, "reason": str(e)[:160]})
+
+    # 新图先入库、成功后再删旧图：替换失败不会把原有照片弄丢
+    replaced = False
+    if old_sid:
+        if not added:
+            raise HTTPException(400, "替换失败：%s" % (failed[0]["reason"] if failed else "未知原因"))
+        with SessionLocal() as s:
+            row = s.query(FaceSample).filter(FaceSample.id == old_sid).first()
+            if row is not None:
+                s.delete(row)
+                s.commit()
+        drop_sample_file(old_path)
+        replaced, added, failed = True, 1, []
+    GALLERY.load()
+    return {"ok": True, "person_id": pid, "name": name, "added": added,
+            "replaced": replaced, "failed": failed}
+
+
+@app.delete("/api/persons/{pid}/photos/{sid}")
+def delete_photo(pid: int, sid: int):
+    with SessionLocal() as s:
+        row = s.query(FaceSample).filter(FaceSample.id == sid,
+                                         FaceSample.person_id == pid).first()
+        if row is None:
+            raise HTTPException(404, "照片不存在")
+        path = row.image_path
+        s.delete(row)
+        s.commit()
+        left = s.query(func.count(FaceSample.id)).filter(FaceSample.person_id == pid).scalar()
+    removed = drop_sample_file(path)
+    GALLERY.load()
+    return {"ok": True, "deleted_sid": sid, "file_removed": removed, "left": left}
 
 
 @app.post("/api/gallery/rebuild")
@@ -353,7 +534,7 @@ def records(limit: int = 50):
                 "elapsed_ms": L.elapsed_ms,
                 "face_count": L.face_count,
                 "faces": [{"name": f.person_name or UNKNOWN, "score": f.score,
-                           "is_unknown": bool(f.is_unknown), "candidate": f.candidate_name}
+                           "is_unknown": bool(f.is_unknown)}
                           for f in faces],
                 "objects": [{"label": o.label, "label_cn": o.label_cn, "score": o.score}
                             for o in objs],
