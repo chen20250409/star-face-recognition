@@ -91,7 +91,7 @@ class FaceEngine:
         return faces[int(np.argmax(areas))]
 
     # ---------- 标注 ----------
-    def annotate(self, rgb: Image.Image, results) -> Image.Image:
+    def annotate(self, rgb: Image.Image, results, objects=None) -> Image.Image:
         img = rgb.copy()
         draw = ImageDraw.Draw(img)
         w, h = img.size
@@ -102,12 +102,31 @@ class FaceEngine:
             log.warning("字体加载失败 %s，回退默认字体（中文会是方块）", e)
             font = ImageFont.load_default()
         lw = max(2, int(min(w, h) * 0.005))
+
+        # 先画物品（蓝色、细线），人脸框后画以覆盖在上层
+        if objects:
+            ofs = max(14, int(fs * 0.86))
+            try:
+                ofont = ImageFont.truetype(FONT_PATH, ofs)
+            except Exception:
+                ofont = font
+            olw = max(1, int(lw * 0.75))
+            for o in objects:
+                x, y, bw, bh = [int(round(v)) for v in o["bbox"]]
+                color = (37, 99, 235)
+                draw.rectangle([x, y, x + bw, y + bh], outline=color, width=olw)
+                text = "%s %.2f" % (o["label_cn"], o["score"])
+                tw, th = draw.textbbox((0, 0), text, font=ofont)[2:]
+                ty = y + bh + 2 if y + bh + th + 4 < h else y - th - 4
+                draw.rectangle([x, ty, x + tw + 8, ty + th + 6], fill=color)
+                draw.text((x + 4, ty + 3), text, fill=(255, 255, 255), font=ofont)
+
         for r in results:
             x, y, bw, bh = [int(round(v)) for v in r["bbox"]]
             known = not r["is_unknown"]
             color = (46, 170, 90) if known else (225, 70, 70)
             draw.rectangle([x, y, x + bw, y + bh], outline=color, width=lw)
-            text = f"{r['name']} {r['score']:.2f}" if known else f"{r['name']} {r['score']:.2f}"
+            text = "%s %.2f" % (r["name"], r["score"])
             tw, th = draw.textbbox((0, 0), text, font=font)[2:]
             ty = y - th - 8 if y - th - 8 > 0 else y + bh + 6
             draw.rectangle([x, ty, x + tw + 10, ty + th + 8], fill=color)

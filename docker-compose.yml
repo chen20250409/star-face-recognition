@@ -20,6 +20,12 @@ services:
       DATA_DIR: /data
       GALLERY_DIR: /data/gallery
       FONT_PATH: /app/fonts/simhei.ttf
+      OBJ_CFG: /models/yolov4-tiny.cfg
+      OBJ_WEIGHTS: /models/yolov4-tiny.weights
+      OBJ_NAMES: /models/coco.names
+      OBJ_SCORE: "0.25"
+      OBJ_NMS: "0.40"
+      OBJ_SIZE: "416"
     volumes:
       - ./models:/models:ro
       - ./data:/data

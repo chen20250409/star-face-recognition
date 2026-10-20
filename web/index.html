@@ -62,6 +62,12 @@
   .thumb img{width:100%;height:110px;object-fit:cover;display:block}
   .thumb .t{font-size:11.5px;padding:5px 7px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .empty{color:var(--muted);font-size:13px;padding:14px 0}
+  .sect{font-size:11.5px;color:var(--muted);margin:8px 0 5px;letter-spacing:.5px}
+  .sect:first-child{margin-top:0}
+  .chip{display:inline-block;background:#eef4ff;color:#1d4ed8;border:1px solid #d6e4ff;
+        border-radius:99px;font-size:12px;padding:2px 10px;margin:0 6px 6px 0;white-space:nowrap}
+  .chip i{font-style:normal;color:#5b8def;font-size:11px;margin-left:5px}
+  .chip.sm{font-size:11.5px;padding:1px 8px;margin:0 4px 2px 0}
   .spinner{display:inline-block;width:13px;height:13px;border:2px solid #cbd5e1;border-top-color:var(--brand);
            border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:6px}
   @keyframes sp{to{transform:rotate(360deg)}}
@@ -94,9 +100,13 @@
       </div>
       <input type="file" id="fileInput" accept="image/*" multiple hidden>
       <div class="thumbs" id="previews"></div>
-      <div style="margin-top:16px;display:flex;gap:10px;align-items:center">
+      <div style="margin-top:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <button class="btn" id="btnRecognize" disabled>开始识别</button>
         <button class="btn ghost" id="btnClear">清空</button>
+        <label class="meta" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="optObjects" checked>
+          同时识别物品（猫 / 狗 / 汽车等 80 类）
+        </label>
         <span class="meta" id="uploadStatus"></span>
       </div>
     </div>
@@ -109,10 +119,13 @@
       <h2>摄像头抓拍识别</h2>
       <div class="tip" id="camTip" hidden></div>
       <video id="video" autoplay playsinline muted></video>
-      <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+      <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
         <button class="btn" id="btnCamStart">开启摄像头</button>
         <button class="btn ghost" id="btnCamShot" disabled>抓拍并识别</button>
         <button class="btn ghost" id="btnCamStop" disabled>关闭</button>
+        <label class="meta" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="optObjectsCam" checked> 同时识别物品
+        </label>
         <span class="meta" id="camStatus"></span>
       </div>
     </div>
@@ -188,13 +201,23 @@ function faceRows(faces) {
   }).join('<hr style="border:0;border-top:1px solid #f0f2f5;margin:6px 0">');
 }
 
-function resultCard(origUrl, resUrl, faces, extra) {
+function objectChips(objects) {
+  if (!objects || !objects.length) return '<div class="meta">未识别到物品</div>';
+  return objects.map(o =>
+    `<span class="chip">${o.label_cn || o.label}<i>${Number(o.score).toFixed(2)}</i></span>`).join('');
+}
+
+function resultCard(origUrl, resUrl, faces, objects, extra) {
   return `<div class="card">
     <div class="imgs">
       <div><img src="${origUrl}" alt="原图"><div class="cap">原图</div></div>
       <div><img src="${resUrl}" alt="结果"><div class="cap">标注结果</div></div>
     </div>
-    <div class="body">${faceRows(faces)}<div class="meta" style="margin-top:6px">${extra||''}</div></div>
+    <div class="body">
+      <div class="sect">人脸</div>${faceRows(faces)}
+      <div class="sect">物品</div>${objectChips(objects)}
+      <div class="meta" style="margin-top:6px">${extra||''}</div>
+    </div>
   </div>`;
 }
 
@@ -236,6 +259,7 @@ $('#btnRecognize').onclick = async () => {
     const fd = new FormData();
     fd.append('files', f, f.name);
     fd.append('source', 'upload');
+    fd.append('detect_objects', $('#optObjects').checked ? 'true' : 'false');
     try {
       const r = await fetch('/api/recognize', {method:'POST', body:fd});
       const j = await r.json();
@@ -243,7 +267,8 @@ $('#btnRecognize').onclick = async () => {
       if (j.errors && j.errors.length) throw new Error(j.errors[0].reason);
       for (const res of j.results) {
         $('#resultCards').insertAdjacentHTML('afterbegin',
-          resultCard(res.original, res.result, res.faces, `耗时 ${res.elapsed_ms}ms · ${f.name}`));
+          resultCard(res.original, res.result, res.faces, res.objects,
+                     `耗时 ${res.elapsed_ms}ms · ${f.name}`));
       }
     } catch (e) {
       $('#resultCards').insertAdjacentHTML('afterbegin',
@@ -319,6 +344,7 @@ $('#btnCamShot').onclick = async () => {
   const fd = new FormData();
   fd.append('files', blob, 'camera_' + Date.now() + '.jpg');
   fd.append('source', 'camera');
+  fd.append('detect_objects', $('#optObjectsCam').checked ? 'true' : 'false');
   $('#camStatus').innerHTML = '<span class="spinner"></span>识别中…';
   try {
     const r = await fetch('/api/recognize', {method:'POST', body:fd});
@@ -326,7 +352,8 @@ $('#btnCamShot').onclick = async () => {
     if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
     for (const res of j.results) {
       $('#camCards').insertAdjacentHTML('afterbegin',
-        resultCard(res.original, res.result, res.faces, `摄像头抓拍 · 耗时 ${res.elapsed_ms}ms`));
+        resultCard(res.original, res.result, res.faces, res.objects,
+                   `摄像头抓拍 · 耗时 ${res.elapsed_ms}ms`));
     }
     $('#camStatus').textContent = '识别完成';
   } catch (e) {
@@ -342,13 +369,14 @@ async function loadRecords() {
     const j = await (await fetch('/api/records?limit=50', {cache:'no-store'})).json();
     if (!j.records.length) { $('#recordsBox').innerHTML = '<div class="empty">还没有识别记录</div>'; return; }
     $('#recordsBox').innerHTML = `<table>
-      <tr><th style="width:60px">#</th><th style="width:150px">时间</th><th style="width:70px">来源</th>
-      <th>识别结果</th><th style="width:80px">人脸数</th><th style="width:80px">耗时</th><th style="width:90px">结果图</th></tr>
+      <tr><th style="width:50px">#</th><th style="width:140px">时间</th><th style="width:60px">来源</th>
+      <th>人脸</th><th>物品</th><th style="width:60px">耗时</th><th style="width:70px">结果图</th></tr>
       ${j.records.map(r => `<tr>
         <td>${r.id}</td><td class="meta">${r.created_at}</td><td class="meta">${r.source}</td>
         <td>${r.faces.length ? r.faces.map(f => `<span class="name ${f.is_unknown?'unknown':''}">${f.name}</span>
-              <span class="meta">${Number(f.score).toFixed(3)}</span>`).join('　') : '<span class="meta">未检测到人脸</span>'}</td>
-        <td class="meta">${r.face_count}</td><td class="meta">${r.elapsed_ms}ms</td>
+              <span class="meta">${Number(f.score).toFixed(3)}</span>`).join('　') : '<span class="meta">无</span>'}</td>
+        <td>${(r.objects && r.objects.length) ? r.objects.map(o => `<span class="chip sm">${o.label_cn || o.label}</span>`).join('') : '<span class="meta">无</span>'}</td>
+        <td class="meta">${r.elapsed_ms}ms</td>
         <td><a href="${r.result}" target="_blank">查看</a></td></tr>`).join('')}
     </table>`;
   } catch (e) { $('#recordsBox').innerHTML = '<div class="empty">加载失败：' + e.message + '</div>'; }

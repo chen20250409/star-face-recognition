@@ -13,9 +13,10 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import desc, func
 
-from database import (FaceSample, Person, RecogFace, RecogLog, SessionLocal,
-                      init_db, wait_for_db)
+from database import (FaceSample, Person, RecogFace, RecogLog, RecogObject,
+                      SessionLocal, init_db, wait_for_db)
 from engine import MARGIN, THRESHOLD, UNKNOWN, FaceEngine
+from objects import ObjectDetector
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("app")
@@ -31,6 +32,7 @@ MAX_FILES = int(os.getenv("MAX_FILES", "20"))
 IMG_EXT = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 
 ENGINE: FaceEngine = None
+OBJECTS: ObjectDetector = None
 
 
 # ---------------------------------------------------------------- 底库缓存
@@ -152,10 +154,11 @@ def seed_gallery(eng: FaceEngine, clear: bool = False) -> dict:
     return {"added": added, "failed": failed}
 
 
-def recognize_one(data: bytes, source: str) -> dict:
+def recognize_one(data: bytes, source: str, detect_objects: bool = True) -> dict:
     t0 = time.time()
     bgr, rgb, faces = ENGINE.detect_all(data)
     results = []
+    face_boxes = []
     for i in range(len(faces)):
         row = faces[i]
         vec = ENGINE.embed(bgr, row)
@@ -167,8 +170,10 @@ def recognize_one(data: bytes, source: str) -> dict:
             name, unknown = candidate, False
         else:
             name, unknown = UNKNOWN, True
+        bbox = [float(row[0]), float(row[1]), float(row[2]), float(row[3])]
+        face_boxes.append(bbox)
         results.append({
-            "bbox": [float(row[0]), float(row[1]), float(row[2]), float(row[3])],
+            "bbox": bbox,
             "name": name,
             "score": round(float(score), 4),
             "margin": round(float(margin), 4),
@@ -176,8 +181,13 @@ def recognize_one(data: bytes, source: str) -> dict:
             "candidate": candidate,
             "det_score": round(float(row[14]), 4),
         })
+
+    objects = []
+    if detect_objects and OBJECTS is not None:
+        objects = OBJECTS.detect(bgr, face_boxes)
+
     _op, orig_url = save_file(data, "uploads", ".jpg")
-    annotated = ENGINE.annotate(rgb, results)
+    annotated = ENGINE.annotate(rgb, results, objects)
     _rp, res_url = save_file(ENGINE.to_jpeg_bytes(annotated), "results", ".jpg")
     elapsed = int((time.time() - t0) * 1000)
 
@@ -195,15 +205,19 @@ def recognize_one(data: bytes, source: str) -> dict:
                             candidate_name=r["candidate"],
                             bbox="%d,%d,%d,%d" % tuple(int(round(x)) for x in r["bbox"]),
                             det_score=r["det_score"]))
+        for o in objects:
+            s.add(RecogObject(log_id=log_id, label=o["label"], label_cn=o["label_cn"],
+                              score=o["score"],
+                              bbox="%d,%d,%d,%d" % tuple(int(round(x)) for x in o["bbox"])))
         s.commit()
     return {"log_id": log_id, "original": orig_url, "result": res_url,
-            "elapsed_ms": elapsed, "faces": results}
+            "elapsed_ms": elapsed, "faces": results, "objects": objects}
 
 
 # ---------------------------------------------------------------- 启动
 @app.on_event("startup")
 def on_startup():
-    global ENGINE
+    global ENGINE, OBJECTS
     os.umask(0o022)
     for d in (UPLOAD_DIR, RESULT_DIR):
         os.makedirs(d, exist_ok=True)
@@ -212,6 +226,11 @@ def on_startup():
         raise RuntimeError("无法连接 MySQL，请检查数据库配置")
     init_db()
     ENGINE = FaceEngine()
+    try:
+        OBJECTS = ObjectDetector()
+    except Exception as e:
+        log.warning("物品检测模型加载失败（人脸功能不受影响）：%s", e)
+        OBJECTS = None
     GALLERY.load()
     if len(GALLERY.names) == 0 and os.path.isdir(GALLERY_DIR):
         r = seed_gallery(ENGINE)
@@ -232,11 +251,13 @@ def health():
         log.warning("健康检查读库失败: %s", e)
         persons, samples, db_ok = 0, 0, False
     return {"ok": True, "db_ok": db_ok, "persons": persons, "samples": samples,
-            "threshold": THRESHOLD, "margin": MARGIN, "engine_ready": ENGINE is not None}
+            "threshold": THRESHOLD, "margin": MARGIN,
+            "engine_ready": ENGINE is not None, "objects_ready": OBJECTS is not None}
 
 
 @app.post("/api/recognize")
-async def recognize(files: List[UploadFile] = File(...), source: str = Form("upload")):
+async def recognize(files: List[UploadFile] = File(...), source: str = Form("upload"),
+                    detect_objects: bool = Form(True)):
     if not files:
         raise HTTPException(400, "没有上传文件")
     if len(files) > MAX_FILES:
@@ -246,7 +267,8 @@ async def recognize(files: List[UploadFile] = File(...), source: str = Form("upl
         try:
             data = await f.read()
             ENGINE.decode(data)          # 先验证确实是图片
-            out.append({**recognize_one(data, source), "filename": f.filename})
+            out.append({**recognize_one(data, source, detect_objects),
+                        "filename": f.filename})
         except Exception as e:
             log.warning("处理 %s 失败: %s", f.filename, e)
             errors.append({"filename": f.filename, "reason": str(e)[:160]})
@@ -321,6 +343,7 @@ def records(limit: int = 50):
         out = []
         for L in logs:
             faces = s.query(RecogFace).filter(RecogFace.log_id == L.id).all()
+            objs = s.query(RecogObject).filter(RecogObject.log_id == L.id).all()
             out.append({
                 "id": L.id,
                 "created_at": L.created_at.strftime("%Y-%m-%d %H:%M:%S") if L.created_at else "",
@@ -332,5 +355,7 @@ def records(limit: int = 50):
                 "faces": [{"name": f.person_name or UNKNOWN, "score": f.score,
                            "is_unknown": bool(f.is_unknown), "candidate": f.candidate_name}
                           for f in faces],
+                "objects": [{"label": o.label, "label_cn": o.label_cn, "score": o.score}
+                            for o in objs],
             })
     return {"ok": True, "records": out}

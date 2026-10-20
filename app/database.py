@@ -84,6 +84,17 @@ class RecogFace(Base):
     det_score: Mapped[float] = mapped_column(Float, nullable=True)
 
 
+class RecogObject(Base):
+    __tablename__ = "recognition_objects"
+    __table_args__ = (Index("idx_ro_log", "log_id"), MYSQL_ARGS)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    log_id: Mapped[int] = mapped_column(Integer, ForeignKey("recognition_logs.id", ondelete="CASCADE"), nullable=False)
+    label: Mapped[str] = mapped_column(String(40), nullable=False)        # 英文类名
+    label_cn: Mapped[str] = mapped_column(String(40), nullable=True)      # 中文名
+    score: Mapped[float] = mapped_column(Float, nullable=True)
+    bbox: Mapped[str] = mapped_column(String(64), nullable=True)
+
+
 def wait_for_db(retries: int = 30, delay: float = 2.0) -> bool:
     """MySQL 可能比容器起得慢，这里做重连重试"""
     for i in range(1, retries + 1):

@@ -5,6 +5,9 @@
 # 模型可用 tools/dl_models.py 重新下载
 models/*.onnx
 models/*.pth
+models/*.weights
+models/*.names
+models/*.cfg
 # 中文字体为微软版权字体，需自行放置
 app/fonts/*.ttf
 app/fonts/*.otf
