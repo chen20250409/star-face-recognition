@@ -111,16 +111,20 @@ check("保留 candidate 供排查", f2 and f2[0]["candidate"] is not None, f2[0]
 
 print()
 print("=" * 70)
-print("4) 网页注册链路：重新注册【鞠婧祎】（模拟网页上传）")
+print("4) 网页注册链路：重新注册【鞠婧祎】（模拟网页上传，全量恢复）")
 print("=" * 70)
 files = []
 d = os.path.join(GALLERY_DIR, "鞠婧祎")
-for n in sorted(os.listdir(d))[:3]:
+for n in sorted(os.listdir(d)):
+    if not n.lower().endswith((".jpg", ".jpeg", ".png")):
+        continue
     with open(os.path.join(d, n), "rb") as f:
         files.append(("files", n, f.read()))
+print("  待注册张数:", len(files))
 st, r3 = post_multipart("/api/persons", files, {"name": "鞠婧祎"})
 print("  ", json.dumps(r3, ensure_ascii=False)[:300])
 check("注册成功 added>=1", r3.get("added", 0) >= 1, r3.get("added"))
+check("底库特征恢复到删前水平", r3.get("added", 0) >= len(files) - 1, (r3.get("added"), len(files)))
 persons = json.loads(get("/api/persons")[1].decode())["persons"]
 check("人物数回到 3", len(persons) == 3, [p["name"] for p in persons])
 
