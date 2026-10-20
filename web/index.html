@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>人脸识别系统</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --panel:#ffffff; --line:#e3e6eb; --text:#1c2024; --muted:#6b7280;
+    --brand:#2563eb; --ok:#0f9d58; --warn:#e5484d; --okbg:#e9f7ef; --warnbg:#fdecec;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  header{background:var(--panel);border-bottom:1px solid var(--line);padding:14px 24px;
+         display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  header h1{font-size:17px;margin:0;font-weight:600;letter-spacing:.3px}
+  .stat{color:var(--muted);font-size:13px}
+  .stat b{color:var(--text);font-weight:600}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#bbb;margin-right:5px;vertical-align:middle}
+  .dot.on{background:var(--ok)} .dot.off{background:var(--warn)}
+  main{max-width:1180px;margin:0 auto;padding:20px 24px 60px}
+  .tabs{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap}
+  .tab{padding:9px 18px;border-radius:8px;border:1px solid var(--line);background:var(--panel);
+       cursor:pointer;font-size:14px;color:var(--muted)}
+  .tab.active{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:600}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:18px}
+  .panel h2{font-size:15px;margin:0 0 14px;font-weight:600}
+  .drop{border:2px dashed #c8d0dc;border-radius:12px;padding:34px 20px;text-align:center;
+        color:var(--muted);cursor:pointer;transition:.15s;background:#fafbfd}
+  .drop:hover,.drop.over{border-color:var(--brand);background:#f2f6ff;color:var(--brand)}
+  .drop b{color:var(--brand)}
+  .hint{font-size:12.5px;color:var(--muted);margin-top:10px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px;margin-top:18px}
+  .card{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}
+  .card .imgs{display:flex;background:#111}
+  .card .imgs>div{flex:1;min-width:0}
+  .card img{width:100%;height:180px;object-fit:contain;display:block}
+  .card .cap{font-size:11.5px;color:#9aa3af;text-align:center;padding:4px 0;background:#111;color:#c9d1db}
+  .card .body{padding:10px 12px;font-size:13px}
+  .row{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+  .name{font-weight:600}
+  .name.unknown{color:var(--warn)}
+  .badge{display:inline-block;font-size:11.5px;padding:1px 8px;border-radius:99px;margin-left:6px;vertical-align:1px}
+  .badge.k{background:var(--okbg);color:var(--ok)} .badge.u{background:var(--warnbg);color:var(--warn)}
+  .meta{color:var(--muted);font-size:12px}
+  button.btn{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:9px 18px;
+             font-size:14px;cursor:pointer}
+  button.btn:disabled{opacity:.5;cursor:not-allowed}
+  button.ghost{background:#fff;color:var(--text);border:1px solid var(--line)}
+  button.danger{background:#fff;color:var(--warn);border:1px solid #f3c2c2}
+  video{width:100%;max-width:520px;border-radius:10px;background:#111;display:block}
+  .tip{background:#fff8e6;border:1px solid #ffe1a8;color:#8a6100;padding:12px 14px;
+       border-radius:8px;font-size:13px;margin-bottom:14px;line-height:1.7}
+  .tip b{color:#7a5300}
+  input[type=text]{padding:9px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px;width:200px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:500;font-size:12.5px}
+  .thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:12px}
+  .thumb{border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .thumb img{width:100%;height:110px;object-fit:cover;display:block}
+  .thumb .t{font-size:11.5px;padding:5px 7px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .empty{color:var(--muted);font-size:13px;padding:14px 0}
+  .spinner{display:inline-block;width:13px;height:13px;border:2px solid #cbd5e1;border-top-color:var(--brand);
+           border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:6px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  code{background:#eef1f5;padding:1px 6px;border-radius:4px;font-size:12.5px}
+</style>
+</head>
+<body>
+<header>
+  <h1>人脸识别系统</h1>
+  <span class="stat"><span class="dot" id="dotStatus"></span><span id="healthText">正在检测服务状态…</span></span>
+  <span class="stat">底库：<b id="stPersons">-</b> 人 / <b id="stSamples">-</b> 张特征</span>
+  <span class="stat">判定阈值：<b id="stThreshold">-</b></span>
+</header>
+
+<main>
+  <div class="tabs">
+    <div class="tab active" data-tab="upload">上传图片识别</div>
+    <div class="tab" data-tab="camera">摄像头抓拍</div>
+    <div class="tab" data-tab="records">识别记录</div>
+    <div class="tab" data-tab="persons">人脸库管理</div>
+  </div>
+
+  <!-- ============ 上传识别 ============ -->
+  <section id="tab-upload">
+    <div class="panel">
+      <h2>选择或拖入图片（支持多选，单张 ≤ 10MB，单批 ≤ 10 张）</h2>
+      <div class="drop" id="drop">
+        把图片拖到这里，或 <b>点击选择文件</b><br>
+        <span class="hint">识别结果会给出：人名 + 相似度 + 标注后的图片；低于阈值判定为「未知」</span>
+      </div>
+      <input type="file" id="fileInput" accept="image/*" multiple hidden>
+      <div class="thumbs" id="previews"></div>
+      <div style="margin-top:16px;display:flex;gap:10px;align-items:center">
+        <button class="btn" id="btnRecognize" disabled>开始识别</button>
+        <button class="btn ghost" id="btnClear">清空</button>
+        <span class="meta" id="uploadStatus"></span>
+      </div>
+    </div>
+    <div class="cards" id="resultCards"></div>
+  </section>
+
+  <!-- ============ 摄像头 ============ -->
+  <section id="tab-camera" hidden>
+    <div class="panel">
+      <h2>摄像头抓拍识别</h2>
+      <div class="tip" id="camTip" hidden></div>
+      <video id="video" autoplay playsinline muted></video>
+      <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn" id="btnCamStart">开启摄像头</button>
+        <button class="btn ghost" id="btnCamShot" disabled>抓拍并识别</button>
+        <button class="btn ghost" id="btnCamStop" disabled>关闭</button>
+        <span class="meta" id="camStatus"></span>
+      </div>
+    </div>
+    <div class="cards" id="camCards"></div>
+  </section>
+
+  <!-- ============ 识别记录 ============ -->
+  <section id="tab-records" hidden>
+    <div class="panel">
+      <h2>识别记录 <button class="btn ghost" style="float:right;padding:5px 12px;font-size:13px" id="btnReloadRecords">刷新</button></h2>
+      <div id="recordsBox"><div class="empty">加载中…</div></div>
+    </div>
+  </section>
+
+  <!-- ============ 人脸库 ============ -->
+  <section id="tab-persons" hidden>
+    <div class="panel">
+      <h2>新增人脸（上传照片即可入库，无需改代码）</h2>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <input type="text" id="newName" placeholder="输入姓名，如：张三">
+        <input type="file" id="newFiles" accept="image/*" multiple>
+        <button class="btn" id="btnAddPerson">注册入库</button>
+        <span class="meta" id="addStatus"></span>
+      </div>
+      <div class="hint">建议每人 3 张以上不同角度/光线的照片，效果更稳。检测不到人脸的照片会被跳过并给出原因。</div>
+    </div>
+    <div class="panel">
+      <h2>当前人脸库 <button class="btn ghost" style="float:right;padding:5px 12px;font-size:13px" id="btnReloadPersons">刷新</button></h2>
+      <div id="personsBox"><div class="empty">加载中…</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const MAX_PER_BATCH = 10, MAX_FILE_MB = 10, CONCURRENCY = 2;
+let picked = [];
+
+/* ---------------- 通用 ---------------- */
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
+  ['upload','camera','records','persons'].forEach(k => $('#tab-' + k).hidden = (k !== t.dataset.tab));
+  if (t.dataset.tab === 'records') loadRecords();
+  if (t.dataset.tab === 'persons') loadPersons();
+});
+
+async function refreshHealth() {
+  try {
+    const r = await fetch('/api/health', {cache:'no-store'});
+    const h = await r.json();
+    $('#dotStatus').className = 'dot ' + (h.db_ok && h.engine_ready ? 'on' : 'off');
+    $('#healthText').textContent = h.db_ok && h.engine_ready ? '服务正常' : '服务异常';
+    $('#stPersons').textContent = h.persons;
+    $('#stSamples').textContent = h.samples;
+    $('#stThreshold').textContent = Number(h.threshold).toFixed(3);
+  } catch (e) {
+    $('#dotStatus').className = 'dot off';
+    $('#healthText').textContent = '无法连接服务';
+  }
+}
+
+function faceRows(faces) {
+  if (!faces || !faces.length) return '<div class="row"><span class="meta">未检测到人脸</span></div>';
+  return faces.map(f => {
+    const known = !f.is_unknown;
+    const cand = (!known && f.candidate) ? `<span class="meta">（最接近：${f.candidate}）</span>` : '';
+    return `<div class="row">
+      <span class="name ${known?'':'unknown'}">${f.name}
+        <span class="badge ${known?'k':'u'}">${known?'已识别':'未知'}</span></span>
+      <span class="meta">相似度 ${Number(f.score).toFixed(3)}</span></div>
+      <div class="row"><span class="meta">检测置信度 ${Number(f.det_score).toFixed(3)}</span>${cand ? '<span></span>' : ''}</div>
+      ${cand ? `<div class="row"><span class="meta"></span>${cand}</div>` : ''}`;
+  }).join('<hr style="border:0;border-top:1px solid #f0f2f5;margin:6px 0">');
+}
+
+function resultCard(origUrl, resUrl, faces, extra) {
+  return `<div class="card">
+    <div class="imgs">
+      <div><img src="${origUrl}" alt="原图"><div class="cap">原图</div></div>
+      <div><img src="${resUrl}" alt="结果"><div class="cap">标注结果</div></div>
+    </div>
+    <div class="body">${faceRows(faces)}<div class="meta" style="margin-top:6px">${extra||''}</div></div>
+  </div>`;
+}
+
+/* ---------------- 上传识别 ---------------- */
+const drop = $('#drop'), fileInput = $('#fileInput');
+drop.onclick = () => fileInput.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files); };
+fileInput.onchange = () => { addFiles(fileInput.files); fileInput.value = ''; };
+
+function addFiles(list) {
+  for (const f of list) {
+    if (!f.type.startsWith('image/')) { alert(`「${f.name}」不是图片`); continue; }
+    if (f.size > MAX_FILE_MB * 1024 * 1024) { alert(`「${f.name}」超过 ${MAX_FILE_MB}MB`); continue; }
+    if (picked.length >= MAX_PER_BATCH) { alert(`单批最多 ${MAX_PER_BATCH} 张`); break; }
+    picked.push(f);
+  }
+  renderPreviews();
+}
+function renderPreviews() {
+  $('#previews').innerHTML = picked.map((f, i) =>
+    `<div class="thumb"><img src="${URL.createObjectURL(f)}"><div class="t">${f.name}</div></div>`).join('');
+  $('#btnRecognize').disabled = picked.length === 0;
+  $('#uploadStatus').textContent = picked.length ? `已选 ${picked.length} 张` : '';
+}
+$('#btnClear').onclick = () => { picked = []; renderPreviews(); $('#resultCards').innerHTML=''; $('#uploadStatus').textContent=''; };
+
+$('#btnRecognize').onclick = async () => {
+  const files = picked.slice();
+  if (!files.length) return;
+  $('#btnRecognize').disabled = true;
+  $('#resultCards').innerHTML = '';
+  let done = 0;
+  const update = () => $('#uploadStatus').innerHTML =
+    (done < files.length ? '<span class="spinner"></span>' : '') + `已完成 ${done}/${files.length}`;
+
+  const worker = async (f) => {
+    const fd = new FormData();
+    fd.append('files', f, f.name);
+    fd.append('source', 'upload');
+    try {
+      const r = await fetch('/api/recognize', {method:'POST', body:fd});
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+      if (j.errors && j.errors.length) throw new Error(j.errors[0].reason);
+      for (const res of j.results) {
+        $('#resultCards').insertAdjacentHTML('afterbegin',
+          resultCard(res.original, res.result, res.faces, `耗时 ${res.elapsed_ms}ms · ${f.name}`));
+      }
+    } catch (e) {
+      $('#resultCards').insertAdjacentHTML('afterbegin',
+        `<div class="card"><div class="body"><b>${f.name}</b><div class="meta" style="color:#e5484d">失败：${e.message}</div></div></div>`);
+    }
+    done++; update();
+  };
+
+  let idx = 0;
+  const run = async () => { while (idx < files.length) { const f = files[idx++]; await worker(f); } };
+  update();
+  await Promise.all(Array.from({length: Math.min(CONCURRENCY, files.length)}, run));
+  $('#btnRecognize').disabled = false;
+  $('#uploadStatus').textContent = `已完成 ${files.length} 张`;
+  refreshHealth();
+};
+
+/* ---------------- 摄像头 ---------------- */
+let stream = null;
+function camTip(msg, isWarn) {
+  const el = $('#camTip');
+  el.hidden = false;
+  el.innerHTML = msg;
+}
+$('#btnCamStart').onclick = async () => {
+  $('#camTip').hidden = true;
+  $('#camStatus').textContent = '';
+  // 三层检测：安全上下文 → API 是否存在 → 实际打开
+  if (!window.isSecureContext) {
+    camTip(`<b>当前页面不是安全上下文（HTTPS 或 localhost），浏览器已禁用摄像头。</b><br>
+      两种解决办法：<br>
+      1. 直接在「上传图片识别」里选照片（推荐，最省事）<br>
+      2. 在本机执行 <code>ssh -L 8080:127.0.0.1:80 chen@服务器 -p 2222</code>，再访问
+         <code>http://localhost:8080</code>（localhost 被视为安全上下文，摄像头可用）`, true);
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    camTip('<b>当前浏览器不支持 getUserMedia。</b>请换用 Chrome / Edge 最新版，或改用「上传图片识别」。', true);
+    return;
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280}, height:{ideal:720}}});
+    $('#video').srcObject = stream;
+    $('#btnCamShot').disabled = false;
+    $('#btnCamStop').disabled = false;
+    $('#camStatus').textContent = '摄像头已开启';
+  } catch (e) {
+    const map = {
+      NotFoundError: '未检测到摄像头设备（这台电脑没有摄像头）。功能已保留，换一台带摄像头的机器或用 localhost 访问即可使用。',
+      DevicesNotFoundError: '未检测到摄像头设备。',
+      NotReadableError: '摄像头被其他程序占用（如会议软件），请关闭后重试。',
+      NotAllowedError: '摄像头权限被拒绝，请在浏览器地址栏允许该站点使用摄像头。',
+      SecurityError: '浏览器安全策略禁止访问摄像头。'
+    };
+    camTip(`<b>无法打开摄像头：${e.name}</b><br>${map[e.name] || e.message}<br><br>
+      这台电脑没有摄像头属正常情况 —— 请改用「上传图片识别」，上传照片同样能识别出是谁。`, true);
+    $('#camStatus').textContent = '摄像头不可用';
+  }
+};
+$('#btnCamStop').onclick = () => {
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  $('#video').srcObject = null;
+  $('#btnCamShot').disabled = true; $('#btnCamStop').disabled = true;
+  $('#camStatus').textContent = '已关闭';
+};
+$('#btnCamShot').onclick = async () => {
+  const v = $('#video');
+  if (!v.videoWidth) return;
+  const cv = document.createElement('canvas');
+  cv.width = v.videoWidth; cv.height = v.videoHeight;
+  cv.getContext('2d').drawImage(v, 0, 0);
+  const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.9));
+  const fd = new FormData();
+  fd.append('files', blob, 'camera_' + Date.now() + '.jpg');
+  fd.append('source', 'camera');
+  $('#camStatus').innerHTML = '<span class="spinner"></span>识别中…';
+  try {
+    const r = await fetch('/api/recognize', {method:'POST', body:fd});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+    for (const res of j.results) {
+      $('#camCards').insertAdjacentHTML('afterbegin',
+        resultCard(res.original, res.result, res.faces, `摄像头抓拍 · 耗时 ${res.elapsed_ms}ms`));
+    }
+    $('#camStatus').textContent = '识别完成';
+  } catch (e) {
+    $('#camStatus').textContent = '识别失败：' + e.message;
+  }
+  refreshHealth();
+};
+
+/* ---------------- 记录 ---------------- */
+async function loadRecords() {
+  $('#recordsBox').innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const j = await (await fetch('/api/records?limit=50', {cache:'no-store'})).json();
+    if (!j.records.length) { $('#recordsBox').innerHTML = '<div class="empty">还没有识别记录</div>'; return; }
+    $('#recordsBox').innerHTML = `<table>
+      <tr><th style="width:60px">#</th><th style="width:150px">时间</th><th style="width:70px">来源</th>
+      <th>识别结果</th><th style="width:80px">人脸数</th><th style="width:80px">耗时</th><th style="width:90px">结果图</th></tr>
+      ${j.records.map(r => `<tr>
+        <td>${r.id}</td><td class="meta">${r.created_at}</td><td class="meta">${r.source}</td>
+        <td>${r.faces.length ? r.faces.map(f => `<span class="name ${f.is_unknown?'unknown':''}">${f.name}</span>
+              <span class="meta">${Number(f.score).toFixed(3)}</span>`).join('　') : '<span class="meta">未检测到人脸</span>'}</td>
+        <td class="meta">${r.face_count}</td><td class="meta">${r.elapsed_ms}ms</td>
+        <td><a href="${r.result}" target="_blank">查看</a></td></tr>`).join('')}
+    </table>`;
+  } catch (e) { $('#recordsBox').innerHTML = '<div class="empty">加载失败：' + e.message + '</div>'; }
+}
+$('#btnReloadRecords').onclick = loadRecords;
+
+/* ---------------- 人脸库 ---------------- */
+async function loadPersons() {
+  $('#personsBox').innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const j = await (await fetch('/api/persons', {cache:'no-store'})).json();
+    if (!j.persons.length) { $('#personsBox').innerHTML = '<div class="empty">人脸库为空</div>'; return; }
+    $('#personsBox').innerHTML = `<table>
+      <tr><th style="width:70px">ID</th><th>姓名</th><th style="width:110px">特征数</th><th style="width:110px">操作</th></tr>
+      ${j.persons.map(p => `<tr><td class="meta">${p.id}</td><td class="name">${p.name}</td>
+        <td class="meta">${p.samples} 张</td>
+        <td><button class="btn danger" style="padding:4px 10px;font-size:12.5px" onclick="delPerson(${p.id},'${p.name}')">删除</button></td>
+        </tr>`).join('')}</table>`;
+  } catch (e) { $('#personsBox').innerHTML = '<div class="empty">加载失败：' + e.message + '</div>'; }
+}
+window.delPerson = async (id, name) => {
+  if (!confirm(`确定从人脸库删除「${name}」？该人的全部特征都会被移除。`)) return;
+  const r = await fetch('/api/persons/' + id, {method:'DELETE'});
+  const j = await r.json();
+  alert(r.ok ? `已删除：${j.deleted}` : ('删除失败：' + (j.detail || r.status)));
+  loadPersons(); refreshHealth();
+};
+$('#btnAddPerson').onclick = async () => {
+  const name = $('#newName').value.trim();
+  const fs = $('#newFiles').files;
+  if (!name) { alert('请先输入姓名'); return; }
+  if (!fs.length) { alert('请选择至少一张照片'); return; }
+  const fd = new FormData();
+  fd.append('name', name);
+  for (const f of fs) fd.append('files', f, f.name);
+  $('#addStatus').innerHTML = '<span class="spinner"></span>上传并提取特征…';
+  try {
+    const r = await fetch('/api/persons', {method:'POST', body:fd});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+    let msg = `「${j.name}」成功入库 ${j.added} 张`;
+    if (j.failed && j.failed.length) msg += `，跳过 ${j.failed.length} 张（${j.failed.map(x => x.reason).join('；')}）`;
+    $('#addStatus').textContent = msg;
+    $('#newFiles').value = '';
+    loadPersons(); refreshHealth();
+  } catch (e) {
+    $('#addStatus').textContent = '失败：' + e.message;
+  }
+};
+$('#btnReloadPersons').onclick = loadPersons;
+
+/* ---------------- 初始化 ---------------- */
+refreshHealth();
+setInterval(refreshHealth, 15000);
+</script>
+</body>
+</html>

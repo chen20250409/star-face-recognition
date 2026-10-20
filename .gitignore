@@ -1,0 +1,36 @@
+# ---- 凭据 ----
+.env
+
+# ---- 大体积 / 有版权风险的资源（不进仓库）----
+# 模型可用 tools/dl_models.py 重新下载
+models/*.onnx
+models/*.pth
+# 中文字体为微软版权字体，需自行放置
+app/fonts/*.ttf
+app/fonts/*.otf
+app/fonts/*.ttc
+# 底库原图与运行时产物
+data/gallery/*
+data/uploads/*
+data/results/*
+data/*.db
+
+# 但保留占位文件，保证目录结构存在
+!data/gallery/.gitkeep
+!data/uploads/.gitkeep
+!data/results/.gitkeep
+!models/.gitkeep
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

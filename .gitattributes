@@ -1,0 +1,8 @@
+# 统一换行，避免 Windows 提交后在 Linux 容器里出现 CRLF 问题
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.png binary
+*.jpg binary
+*.onnx binary
+*.ttf binary
