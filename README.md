@@ -105,6 +105,25 @@ sudo docker compose exec -T app python verify_photos.py       # 人脸库照片�
 sudo docker stats --no-stream                                 # 资源占用
 ```
 
+### 脏数据实验（会破坏底库，跑前务必备份）
+
+```bash
+# 1) 备份
+sudo mysqldump --single-transaction --skip-lock-tables faces > /tmp/faces_backup.sql
+sudo tar czf /tmp/gallery_backup.tgz data/gallery
+
+# 2) 跑实验
+sudo docker compose exec -T app python exp_dirty.py    # 混入 4 张错标照片（轻度污染）
+sudo docker compose exec -T app python exp_merge.py    # 整体偷换标签（重度污染）
+
+# 3) 恢复
+sudo sh -c 'mysql faces < /tmp/faces_backup.sql'
+sudo rm -rf data/gallery && sudo tar xzf /tmp/gallery_backup.tgz -C .
+sudo docker compose restart app
+```
+
+两个脚本的结论记在「五、识别判定规则」下面。
+
 ## 五、识别判定规则
 
 一个检测框被判为「已知」需要**同时**满足：
@@ -128,6 +147,33 @@ sudo docker stats --no-stream                                 # 资源占用
 阈值没有压到"让这份样本最好看"的位置（那样对真陌生人会失效），保持在官方 0.363 并叠加 margin。
 
 底库质量说明：这 27 张是 360px 级微博缩略图，带水印、姿态差异大（尤其鞠婧祎），留一法仍有 2/27 的真实误判，属模型能力上限。换成清晰正脸照能明显提升。
+
+### 脏数据（错标照片）的影响（实测）
+
+脚本 `app/exp_dirty.py` / `app/exp_merge.py`，3 人底库各 9 张，两组实验。
+
+**轻度污染：往「鞠婧祎」名下混进 4 张景甜照片（变 13 张）**
+
+| 查询图（景甜的 5 张留出图） | 干净底库 | 污染后 |
+|---|---|---|
+| 判成「景甜」 | 5 / 5 | **5 / 5** |
+| 相似度 | 0.61 – 0.77 | 0.61 – 0.77（完全不变） |
+| margin | 0.13 – 0.41 | 0.06 – 0.27（明显收窄） |
+
+分数一点没动，只是 margin 被吃掉一半。原因是对**人**取类中心再比对：正确标签那组（9 张纯的）比被稀释的那组（13 张混的）更贴近查询图，排名不会翻。
+
+**重度污染：景甜 9 张全部挂到「鞠婧祎」名下，再把「景甜」这个人删掉**
+
+| 查询图 | 结果 |
+|---|---|
+| 景甜的 5 张 | **全部判成「鞠婧祎」**，0.51 – 0.69，margin 0.23 – 0.41 |
+| 鞠婧祎本人的 5 张 | 3 张认对，**2 张掉到阈值以下判「未知」**（0.354 / 0.313） |
+
+三条结论：
+
+1. 标签被整体偷换时系统**没有任何机制能发现**，它只看到「这批脸在库里」。
+2. 脏数据的真实代价不是让别人被认错，而是让**原主人开始认不出**——类中心被拉偏，分数跌破 0.363。
+3. margin 收窄是最早的预警。要做底库健康检查，可以定期算两两类中心的余弦相似度，超过 0.5 基本就是互相污染了。
 
 ## 六、物品检测
 
