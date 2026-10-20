@@ -301,3 +301,7 @@ Navicat：`ssh -L 3307:127.0.0.1:3306 chen@127.0.0.1 -p 2222`，再连 `127.0.0.
 | 中文显示方块 | 确认 `app/fonts/simhei.ttf` 在镜像内 |
 | 某人总识别不出 | 底库图太少/太糊，在网页「人脸库管理」补 3 张以上清晰正脸照 |
 | 结果图 404 | 确认 `data/uploads`、`data/results` 存在且 0755 |
+| 底库照片 404（`/gallery/` 全部或部分 404） | 若做过 `rm -rf data/gallery` 再恢复（脏数据实验回滚），bind mount 按 inode 记，容器仍指向已删的旧目录 → **必须 `docker compose up -d --force-recreate nginx app` 重建容器**重新挂载；重建后宿主机新目录才生效 |
+| 底库/上传文件夹在文件管理器里显示「锁」、chen 不能写 | 容器曾以 root 写入。当前 `docker-compose.yml` 已给 app 加 `user: "1000:1000"`（= chen）根治；旧文件用 `sudo chown -R chen:chen data/` 归位 |
+
+> **根治说明**：app 容器现在以宿主机 `chen`(uid=1000) 身份运行，写进 `data/` 的文件属主直接就是 chen，不再产生 root 属主目录。nginx 仍以 root 运行（绑 80 端口需要），只读挂载 `data/gallery`，不受影响。

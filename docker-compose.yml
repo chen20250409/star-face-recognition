@@ -4,11 +4,14 @@ services:
     image: face-app:1.0
     container_name: face-app
     restart: unless-stopped
+    # 以宿主机 chen(uid=1000) 身份运行：写进 /data 的文件属主就是 chen，不再出现 root 属主目录
+    user: "1000:1000"
     # 用 host 网络：MySQL 只监听宿主机 127.0.0.1:3306，bridge 网络下的容器访问不到
     network_mode: host
     working_dir: /app
     environment:
       TZ: Asia/Shanghai
+      HOME: /tmp
       DB_HOST: 127.0.0.1
       DB_PORT: "3306"
       DB_USER: ${DB_USER:-face}
